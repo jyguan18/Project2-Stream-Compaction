@@ -13,7 +13,7 @@
 #include <stream_compaction/thrust.h>
 #include "testing_helpers.hpp"
 
-const int ARRAY_SIZE = 1 << 8; // feel free to change the size of array
+const int ARRAY_SIZE = 1 << 24; // feel free to change the size of array
 const int NPOT = ARRAY_SIZE - 3; // Non-Power-Of-Two
 int *a = new int[ARRAY_SIZE];
 int *b = new int[ARRAY_SIZE];

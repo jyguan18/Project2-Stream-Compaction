@@ -2,6 +2,9 @@
 #include <cuda_runtime.h>
 #include "common.h"
 #include "thrust.h"
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+#include <thrust/scan.h>
 
 namespace StreamCompaction {
     namespace Thrust {
@@ -19,6 +22,14 @@ namespace StreamCompaction {
             // TODO use `thrust::exclusive_scan`
             // example: for device_vectors dv_in and dv_out:
             // thrust::exclusive_scan(dv_in.begin(), dv_in.end(), dv_out.begin());
+            thrust::device_vector<int> d_in(idata, idata + n);
+            thrust::device_vector<int> d_out(n);
+
+            thrust::exclusive_scan(d_in.begin(), d_in.end(), d_out.begin());
+
+            thrust::copy(d_out.begin(), d_out.end(), odata);
+
+
             timer().endGpuTimer();
         }
     }

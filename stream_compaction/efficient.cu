@@ -39,9 +39,7 @@ namespace StreamCompaction {
         }
 
         void scan(int n, int *odata, const int *idata, bool isCompact) {
-            if (!isCompact) {
-                timer().startGpuTimer();
-            }
+            
 
             int logn = ilog2ceil(n);
             int nPadded = 1 << logn;
@@ -57,7 +55,10 @@ namespace StreamCompaction {
             else {
                 cudaMemcpy(dev_data, idata, n * sizeof(int), cudaMemcpyHostToDevice);
             }
-            
+
+            if (!isCompact) {
+                timer().startGpuTimer();
+            }
             
             for (int d = 0; d < logn; ++d) {
                 // n / (2 ^ (d + 1))
@@ -76,6 +77,10 @@ namespace StreamCompaction {
 
             }
 
+            if (!isCompact) {
+                timer().endGpuTimer();
+            }
+
             if (isCompact) {
                 cudaMemcpy(odata, dev_data, n * sizeof(int), cudaMemcpyDeviceToDevice);
             }
@@ -84,22 +89,6 @@ namespace StreamCompaction {
             }
 
             cudaFree(dev_data);
-
-            if (!isCompact) {
-                timer().endGpuTimer();
-            }
-        }
-
-        void printArray(int n, int* a, bool abridged = false) {
-            printf("    [ ");
-            for (int i = 0; i < n; i++) {
-                if (abridged && i + 2 == 15 && n > 16) {
-                    i = n - 2;
-                    printf("... ");
-                }
-                printf("%3d ", a[i]);
-            }
-            printf("]\n");
         }
 
         /**
@@ -112,7 +101,7 @@ namespace StreamCompaction {
          * @returns      The number of elements remaining after compaction.
          */
         int compact(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
+            
             const size_t bytes = n * sizeof(int);
             cudaError_t cpyRes;
 
@@ -131,6 +120,8 @@ namespace StreamCompaction {
             int* dev_odata;
             cudaMalloc((void**)&dev_odata, bytes);
 
+            timer().startGpuTimer();
+
             int gridSize = (n + blockSize - 1) / blockSize;
             Common::kernMapToBoolean << < gridSize, blockSize >> > (n, dev_Bools, dev_idata);
 
@@ -142,6 +133,8 @@ namespace StreamCompaction {
             
             // scatter em
             Common::kernScatter << < gridSize, blockSize >> > (n, dev_odata, dev_idata, dev_Bools, scanData);
+
+            timer().endGpuTimer();
             
             cudaMemcpy(odata, dev_odata, bytes, cudaMemcpyDeviceToHost);
 
@@ -149,8 +142,6 @@ namespace StreamCompaction {
 
             cudaMemcpy(&lastBool, dev_Bools + (n - 1), sizeof(int), cudaMemcpyDeviceToHost);
             cudaMemcpy(&lastScan, scanData + (n - 1), sizeof(int), cudaMemcpyDeviceToHost);
-
-            timer().endGpuTimer();
 
             cudaFree(dev_Bools);
             cudaFree(scanData);

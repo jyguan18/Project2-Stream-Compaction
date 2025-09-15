@@ -77,13 +77,13 @@ namespace StreamCompaction {
                 }
             }
 
+            timer().endCpuTimer();
+
             int scanResult = tempData[n - 1] + scanData[n - 1];
 
             delete[] tempData;
             delete[] scanData;
 
-
-            timer().endCpuTimer();
             return scanResult;
         }
 
