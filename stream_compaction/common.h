@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
+#include <nvtx3/nvToolsExt.h>
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -64,6 +65,29 @@ namespace StreamCompaction {
                 cpu_timer_started = true;
 
                 time_start_cpu = std::chrono::high_resolution_clock::now();
+            }
+
+            void pauseGpuTimer()
+            {
+                if (gpu_timer_started)
+                {
+                    cudaEventRecord(event_end);
+                    cudaEventSynchronize(event_end);
+                    float elapsed = 0.f;
+
+                    cudaEventElapsedTime(&elapsed, event_start, event_end);
+                    prev_elapsed_time_gpu_milliseconds += elapsed;
+                }
+
+            }
+
+            void continueGpuTimer()
+            {
+                if (gpu_timer_started)
+                {
+                    cudaEventRecord(event_start);
+                }
+
             }
 
             void endCpuTimer()

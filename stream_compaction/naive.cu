@@ -24,6 +24,19 @@ namespace StreamCompaction {
             
         }
 
+        __global__ void exclusiveScan(int n, int* odata, const int* idata) {
+            int idx = threadIdx.x + (blockIdx.x * blockDim.x);
+
+            if (idx >= n) return;
+
+            if (idx > 0) {
+                odata[idx] = idata[idx - 1];
+            }
+            else {
+                odata[idx] = 0;
+            }
+        }
+
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
@@ -35,15 +48,18 @@ namespace StreamCompaction {
             int* tempOut;
             cudaMalloc((void**)&tempIn, n * sizeof(int));
             cudaMalloc((void**)&tempOut, n * sizeof(int));
-            cudaMemset(tempIn, 0, sizeof(int));
-            cudaMemcpy(tempIn + 1, idata, (n - 1) * sizeof(int), cudaMemcpyHostToDevice);
+
+            cudaMemcpy(tempIn, idata, n * sizeof(int), cudaMemcpyHostToDevice);
+
+            int blockSize = 128;
+            dim3 blocksPerGrid((n + blockSize - 1) / blockSize);
             
             for (int d = 1; d <= ilog2ceil(n); ++d) {
-                naiveScan << < 1, std::min(1024, n) >> > (n, tempOut, tempIn, d); // Check that this is the right blocksize!!
+                naiveScan << < blocksPerGrid, blockSize >> > (n, tempOut, tempIn, d);
                 std::swap(tempOut, tempIn);
             }
 
-            std::swap(tempOut, tempIn);
+            exclusiveScan << < blocksPerGrid, blockSize >> > (n, tempOut, tempIn);
 
             cudaMemcpy(odata, tempOut, n * sizeof(int), cudaMemcpyDeviceToHost);
 
