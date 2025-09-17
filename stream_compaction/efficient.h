@@ -6,7 +6,7 @@ namespace StreamCompaction {
     namespace Efficient {
         StreamCompaction::Common::PerformanceTimer& timer();
 
-        void scan(int n, int *odata, const int *idata, bool isCompact);
+        void scan(int n, int *odata, const int *idata, bool fromCompact=false);
 
         int compact(int n, int *odata, const int *idata);
     }

@@ -15,138 +15,151 @@ namespace StreamCompaction {
             return timer;
         }
 
+        // sweep them up
+        __global__ void kernelUpSweep(int n, int* data, int step) {
+            int idx = threadIdx.x + (blockIdx.x * blockDim.x);
+
+            if (idx >= n / step) return;
+
+            idx *= step;
+            data[idx + step - 1] += data[idx + (step >> 1) - 1];
+        }
+
+        // sweep them down
+        __global__ void kernelDownSweep(int n, int* data, int step) {
+            int idx = threadIdx.x + (blockIdx.x * blockDim.x);
+
+            if (idx >= n / step) return;
+
+            idx *= step;
+            int temp = data[idx + (step >> 1) - 1];
+            data[idx + (step >> 1) - 1] = data[idx + step - 1];
+            data[idx + step - 1] += temp;
+        }
+
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
-
-        __global__ void kernelUpSweep(int n, int* odata, int d) {
-            int idx = threadIdx.x + (blockIdx.x * blockDim.x);
-            int k = (1 << (d + 1)) * idx;
-
-            if (k >= n) return;
-            odata[k + (1 << (d + 1)) - 1] += odata[k + (1 << d) - 1];
-        }
-
-        __global__ void kernelDownSweep(int n, int* odata, int d) {
-            int idx = threadIdx.x + (blockIdx.x * blockDim.x);
-            int k = (1 << (d + 1)) * idx;
-
-            if (k >= n) return;
-            int t = odata[k + (1 << d) - 1];
-            odata[k + (1 << d) - 1] = odata[k + (1 << (d + 1)) - 1];
-            odata[k + (1 << (d + 1)) - 1] += t;
-
-        }
-
-        void scan(int n, int *odata, const int *idata, bool isCompact) {
-            
+        void scan(int n, int* odata, const int* idata, bool fromCompact) {
+            if (n <= 0) {
+                return;
+            }
 
             int logn = ilog2ceil(n);
             int nPadded = 1 << logn;
 
-            int *dev_data;
+            int* dev_data;
             cudaMalloc((void**)&dev_data, nPadded * sizeof(int));
+            checkCUDAError("scan: cudaMalloc for dev_data failed");
 
-            cudaMemset(dev_data, 0, nPadded * sizeof(int));
+            // copy direction is based on where it's coming from
+            cudaMemcpyKind kind = fromCompact ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
+            cudaMemcpy(dev_data, idata, n * sizeof(int), kind);
+            checkCUDAError("scan: Initial cudaMemcpy failed");
 
-            if (isCompact) {
-                cudaMemcpy(dev_data, idata, n * sizeof(int), cudaMemcpyDeviceToDevice);
+            // make the padded region 0 (if it exists)
+            if (nPadded > n) {
+                cudaMemset(dev_data + n, 0, (nPadded - n) * sizeof(int));
+                checkCUDAError("scan: cudaMemset for padding failed");
             }
-            else {
-                cudaMemcpy(dev_data, idata, n * sizeof(int), cudaMemcpyHostToDevice);
-            }
 
-            if (!isCompact) {
+            if (!fromCompact) {
                 timer().startGpuTimer();
             }
-            
+
+            // Up up sweep
             for (int d = 0; d < logn; ++d) {
-                // n / (2 ^ (d + 1))
-                dim3 blocksPerGrid((nPadded / (1 << (d + 1)) + blockSize - 1) / blockSize);
-
-                kernelUpSweep << < blocksPerGrid, blockSize >> > (nPadded, dev_data, d);
+                int step = 1 << (d + 1);
+                int numThreads = nPadded / step;
+                dim3 blocksPerGrid((numThreads + blockSize - 1) / blockSize);
+                kernelUpSweep << <blocksPerGrid, blockSize >> > (nPadded, dev_data, step);
             }
 
-            cudaMemset(dev_data + (nPadded - 1), 0, sizeof(int));
+            // exclusive scan, last element is 0
+            cudaMemset(dev_data + nPadded - 1, 0, sizeof(int));
 
+            // Down down sweet
             for (int d = logn - 1; d >= 0; --d) {
-                // n / (2 ^ (d + 1))
-                dim3 blocksPerGrid((nPadded / (1 << (d + 1)) + blockSize - 1) / blockSize);
-
-                kernelDownSweep << < blocksPerGrid, blockSize >> > (nPadded, dev_data, d);
-
+                int step = 1 << (d + 1);
+                int numThreads = nPadded / step;
+                dim3 blocksPerGrid((numThreads + blockSize - 1) / blockSize);
+                kernelDownSweep << <blocksPerGrid, blockSize >> > (nPadded, dev_data, step);
             }
 
-            if (!isCompact) {
+            if (!fromCompact) {
                 timer().endGpuTimer();
             }
 
-            if (isCompact) {
-                cudaMemcpy(odata, dev_data, n * sizeof(int), cudaMemcpyDeviceToDevice);
-            }
-            else {
-                cudaMemcpy(odata, dev_data, n * sizeof(int), cudaMemcpyDeviceToHost);
-            }
+            // Copy result
+            cudaMemcpyKind finalKind = fromCompact ? cudaMemcpyDeviceToDevice : cudaMemcpyDeviceToHost;
+            cudaMemcpy(odata, dev_data, n * sizeof(int), finalKind);
+            checkCUDAError("scan: Final cudaMemcpy failed");
 
             cudaFree(dev_data);
         }
 
         /**
          * Performs stream compaction on idata, storing the result into odata.
-         * All zeroes are discarded.
-         *
-         * @param n      The number of elements in idata.
-         * @param odata  The array into which to store elements.
-         * @param idata  The array of elements to compact.
-         * @returns      The number of elements remaining after compaction.
          */
-        int compact(int n, int *odata, const int *idata) {
-            
-            const size_t bytes = n * sizeof(int);
-            cudaError_t cpyRes;
-
-            // mark em
-            int* dev_Bools;
-            cudaMalloc((void**)&dev_Bools, bytes);
-
-            int* dev_idata;
-            cudaMalloc((void**)&dev_idata, bytes);
-            cpyRes = cudaMemcpy(dev_idata, idata, bytes, cudaMemcpyHostToDevice);
-            if (cpyRes != CUDA_SUCCESS) {
-                std::cout << "Copy idata failed." << std::endl;
-                return -1;
+        int compact(int n, int* odata, const int* idata) {
+            if (n <= 0) {
+                return 0;
             }
 
+            int logn = ilog2ceil(n);
+            int nPadded = 1 << logn;
+            const size_t padded_bytes = nPadded * sizeof(int);
+
+            // buffers setup
+            int* dev_idata;
+            int* dev_Bools;
             int* dev_odata;
-            cudaMalloc((void**)&dev_odata, bytes);
+            int* scanData;
+            cudaMalloc((void**)&dev_idata, padded_bytes);
+            cudaMalloc((void**)&dev_Bools, padded_bytes);
+            cudaMalloc((void**)&dev_odata, padded_bytes);
+            cudaMalloc((void**)&scanData, padded_bytes);
+            checkCUDAError("compact: cudaMalloc failed");
+
+            // Copy host data to device and pad with zeros
+            cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
+            if (nPadded > n) {
+                cudaMemset(dev_idata + n, 0, (nPadded - n) * sizeof(int));
+            }
 
             timer().startGpuTimer();
 
-            int gridSize = (n + blockSize - 1) / blockSize;
-            Common::kernMapToBoolean << < gridSize, blockSize >> > (n, dev_Bools, dev_idata);
+            int gridSize = (nPadded + blockSize - 1) / blockSize;
 
-            // scan em
-            int* scanData;
-            cudaMalloc((void**)&scanData, bytes);
+            // Step 1: mark en
+            Common::kernMapToBoolean << <gridSize, blockSize >> > (nPadded, dev_Bools, dev_idata);
 
-            scan(n, scanData, dev_Bools, true);
-            
-            // scatter em
-            Common::kernScatter << < gridSize, blockSize >> > (n, dev_odata, dev_idata, dev_Bools, scanData);
+            // Step 2: scan em
+            scan(nPadded, scanData, dev_Bools, true);
+
+            // Step 3: scatter em
+            Common::kernScatter << <gridSize, blockSize >> > (nPadded, dev_odata, dev_idata, dev_Bools, scanData);
 
             timer().endGpuTimer();
-            
-            cudaMemcpy(odata, dev_odata, bytes, cudaMemcpyDeviceToHost);
 
-            int lastBool, lastScan;
+            // Get the final count of non-zero elements from the last valid element
+            int lastBool = 0, lastScan = 0;
+            if (n > 0) {
+                cudaMemcpy(&lastBool, dev_Bools + (n - 1), sizeof(int), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&lastScan, scanData + (n - 1), sizeof(int), cudaMemcpyDeviceToHost);
+            }
+            int count = lastBool + lastScan;
 
-            cudaMemcpy(&lastBool, dev_Bools + (n - 1), sizeof(int), cudaMemcpyDeviceToHost);
-            cudaMemcpy(&lastScan, scanData + (n - 1), sizeof(int), cudaMemcpyDeviceToHost);
+            // Copy the final compacted array back to the host
+            cudaMemcpy(odata, dev_odata, count * sizeof(int), cudaMemcpyDeviceToHost);
 
+            // LET THEM BE FREEEE
             cudaFree(dev_Bools);
             cudaFree(scanData);
+            cudaFree(dev_idata);
+            cudaFree(dev_odata);
 
-            return lastBool + lastScan;
+            return count;
         }
     }
 }

@@ -13,7 +13,7 @@
 #include <stream_compaction/thrust.h>
 #include "testing_helpers.hpp"
 
-const int ARRAY_SIZE = 1 << 24; // feel free to change the size of array
+const int ARRAY_SIZE = 1 << 25; // feel free to change the size of array
 const int NPOT = ARRAY_SIZE - 3; // Non-Power-Of-Two
 int *a = new int[ARRAY_SIZE];
 int *b = new int[ARRAY_SIZE];
@@ -69,14 +69,14 @@ int main(int argc, char* argv[]) {
 
     zeroArray(ARRAY_SIZE, c);
     printDesc("work-efficient scan, power-of-two");
-    StreamCompaction::Efficient::scan(ARRAY_SIZE, c, a, false);
+    StreamCompaction::Efficient::scan(ARRAY_SIZE, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     //printArray(SIZE, c, true);
     printCmpResult(ARRAY_SIZE, b, c);
 
     zeroArray(ARRAY_SIZE, c);
     printDesc("work-efficient scan, non-power-of-two");
-    StreamCompaction::Efficient::scan(NPOT, c, a, false);
+    StreamCompaction::Efficient::scan(NPOT, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     //printArray(NPOT, c, true);
     printCmpResult(NPOT, b, c);
